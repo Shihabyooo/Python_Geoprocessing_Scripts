@@ -10,12 +10,12 @@ sys.setrecursionlimit(50000) #TODO this is a stupid hack to workaround the naive
 #TODO implement file existence checks and handling I/O exceptions
 
 #Inputs
-inputRasterPath = "path\\here"
-inputOutletsPath = "path\\here"
-inputSubcatchmentsPath = "path\\here"
+inputRasterPath = "/path/here"
+inputOutletsPath = "/path/here"
+inputSubcatchmentsPath = "/path/here"
 
 tempDir = os.path.dirname(__file__) + "/tempDir/" #to store clipped rasters. Should be deleted after script finishes executing
-#TODO implement exception handling that calls cleanup method in case of some issue. Otherwise this directory (and any clipped\
+#TODO implement exception handling that calls cleanup method in case of some issue. Otherwise this directory (and any clipped\\
 #rasters) will remain on disk and cause this script to break in subsequent run.
 
 usNeighboursFDR = numpy.array([[8, 7, 6], [1, 0, 5], [2, 3, 4]]) #Value a pixel must have to be considered pouring to the central cell. From left to right, top to bottom.
@@ -27,11 +27,10 @@ outputNoDataValue = 0
 #cached parameters
 sourceY = 0
 sourceX = 0
-#sourceTransforms = []
+
 clippedRastersRefs = [] #holds a tuple containing file path for each clipped raster, and the geometry used to clip it (as WKT)
 outlets = [] #list of outlet georeferenced coordinates
 outputRaster = None #ref to gdal raster for output
-#outletAssociations = {} #dict(idOfOutletinOutletsList : idOfRasterPathInClippedRastersRefsList)
 
 #defs 
 def ComputeExtent(rasterPath) -> list:
@@ -59,13 +58,11 @@ def ProcessInputRaster():
 
     sourceX = raster.RasterXSize
     sourceY = raster.RasterYSize
-    #sourceTransforms = raster.GetGeoTransform()
 
     polys = ogr.Open(inputSubcatchmentsPath, 0)
     polyCount = polys.GetLayer().GetFeatureCount()
-    print (f"Clipping input raster to {polyCount} subcatchemnts")
+    print (f"Clipping input raster to {polyCount} subcatchments")
     
-    #print (polys.GetLayer().GetSpatialRef())
     crs = polys.GetLayer().GetSpatialRef()
     
     os.makedirs(tempDir)
@@ -76,9 +73,10 @@ def ProcessInputRaster():
         polyAsWKT = feature.geometry().ExportToWkt()
 
         gdal.Warp(outputPath, raster, **{
-                     "cropToCutline" : True,
-                     "cutlineWKT" : polyAsWKT,
-                     "cutlineSRS" : crs})
+                    #"cropToCutline" : True,
+                    "cutlineWKT" : polyAsWKT,
+                    "cutlineSRS" : crs,
+                    "creationOptions" : {'COMPRESS': 'DEFLATE'}})
 
         clippedRastersRefs.append([outputPath, polyAsWKT])
         counter += 1
@@ -118,24 +116,13 @@ def CreateOutputRaster():
 
     print (f"Created output raster at {outputPath}")
 
-# def Contains(extent, point) -> bool:
-#     return extent[0] <= point[0] <= extent[2] and extent[1] <= point[1] <= extent[3]
-
 def GeoCoordToImageSpace(geoCoordPair : list, rasterPath) -> list:
     transforms = gdal.Open(rasterPath, gdal.GA_ReadOnly).GetGeoTransform()
     
-    outlet = [  int(-1 * (transforms[3] - geoCoordPair[1]) / transforms[5]) + 1,
+    pixel = [  int(-1 * (transforms[3] - geoCoordPair[1]) / transforms[5]) + 1,
                 int((geoCoordPair[0] - transforms[0]) / transforms[1]) + 1]
     
-    return outlet
-
-def LocalImageSpaceToGlobalImageSpace(pixel : list, localRaster) -> list: #converts coordinate in the clipped raster's coordinate to the large rasters coordinates
-    #easiest solution (to think of) is to convert local image to georef, then georef to global
-    lTransforms = localRaster.GetGeoTransform() #anchor coord x and y = 0 and 3, pixelSizeX = 1, pixelSizeY = 5
-    geoCoords = [pixel[1] * lTransforms[1] + lTransforms[0],
-                 lTransforms[3] - abs(pixel[0] * lTransforms[5])]
-    gPixel = GeoCoordToImageSpace(geoCoords, inputRasterPath)
-    return gPixel
+    return pixel
 
 def AssociateOutletWithRaster(outlet): #returns imagespace coord of outlet and the raster it covers (coords relative to this raster), None if no raster covers the point
     for ref in clippedRastersRefs:
@@ -185,7 +172,7 @@ def TraceLFP(outlet : list, fdr) -> list:
 def ProcessLFPs():
     #We create one big array for the output
     lfpArray = numpy.full(shape=(sourceY, sourceX), fill_value = outputNoDataValue, dtype = numpy.int16, order="C")
-    outletID = 1 #incremented for each outlet
+    outletID = 1 #incremented for each outlet #TODO consider using id of outlet feature attribute (fid?)
     for rawOutlet in outlets:
         outlet, rasterPath = AssociateOutletWithRaster(rawOutlet)
         if outlet is None:
@@ -201,25 +188,16 @@ def ProcessLFPs():
 
         for pixel in lfp:
             pixel = [pixel[0] - 1, pixel[1] - 1] #adjust for the padding
-            gPixel = LocalImageSpaceToGlobalImageSpace(pixel, raster)
-            
-            # #test
-            # if (gPixel[0] >= 3833 or gPixel[1] >= 3676):
-            #     continue
-            # #test
-
-            lfpArray[gPixel[0], gPixel[1]] = outletID
+            lfpArray[pixel[0], pixel[1]] = outletID
 
         outletID += 1
     
     return lfpArray
 
-
 def CleanUp():
     for ref in clippedRastersRefs:
         os.remove(ref[0])
     os.removedirs(tempDir)
-
 
 ProcessInputRaster()
 CreateOutputRaster()
