@@ -9,72 +9,98 @@
 
 #TODO add sampling methods other than NN.
 
-import glob, os
+from glob import glob
+from os import path
 from osgeo import gdal
 from datetime import datetime, timedelta
 
 #Inputs
-pointToSample = [-1.234, 5.678] #x, y coordiantes. Must match rasters' CRS
+#pointsToSample is a dict with key = point name (to be used in output, must be unique), and value = coordinates of the point. must be in same CRS as rasters
+#TODO add option to import points from vectors files (gpkg, shp, etc)
+pointsToSample = {"point_1_eg" : [0.5, 1.5],
+                  "point_2_eg" : [1.0, 1.5],
+                  "point_3_eg" : [-0.5, 1.0]}
 
-rastersPath = "/path/to/rasters/root/dir/"
 
+
+rastersPath = "/path/to/raster"
 #The string searchGlob is appended to rastersPath to create the search glob wildcard.
-#If for example your rasters all all in the root of rasterPath directory, then "*.tif" is enough to include all tifs in it.
+#If for example your rasters all all in the root of rasterPath directory, then "/*.tif" is enough to include all tifs in it.
 #If the rasters are split between multiple subdirectories, then "*/*.tif" may be used to traverse these subdirs.
 #See Python Glob function for more details.
-searchGlob = "*.tif" 
+searchGlob = "/*.tif" 
 
-outputPath = os.path.dirname(__file__) + "/output.csv"
+outputPath = path.dirname(__file__) + "/outputFile.csv"
 precision = 2 #max number of decimal digits to be written in the output
 
 #Adjust this function depending on the format of the file name
 #This implementation assumes the files to take the name "year.tif", e.g. "2000.tif"
-def ExtractDateStringFromName(fileName : str) -> str:
+def ExtractDateStringFromName(fileName : str) -> str: 
     splitString = fileName.split(".")
     return splitString[0]
 
-
 #Processing
 #Practically a nearest neighbour sampler
-def SamplePoint(point, rasterPath) -> dict: #{"yyyy-mm-dd" : value}
+def SamplePoints(points : dict, rasterPath : str) -> dict:
     raster = gdal.Open(rasterPath, gdal.GA_ReadOnly)
     bandsCount = raster.RasterCount
     transformations = raster.GetGeoTransform() #anchor coord x and y = 0 and 3, pixelSizeX = 1, pixelSizeY = 5
-
-    #get image space coordinate of point
-    x = int((point[0] - transformations[0]) / transformations[1])
-    y = int(-1 * (transformations[3] - point[1]) / transformations[5])
-
-    yearStart = datetime(int(ExtractDateStringFromName(fileName = os.path.split(rasterPath)[1])), 1, 1)
-
-    yearTS = {}
+    
+    pixels = {}
+    for pointID in points.keys():
+        geoRefCoords = points[pointID]
+        x = int((geoRefCoords[0] - transformations[0]) / transformations[1])
+        y = int(-1 * (transformations[3] - geoRefCoords[1]) / transformations[5])
+        pixels[pointID] = [y, x]
+    
+    yearStart = datetime(int(ExtractDateStringFromName(fileName = path.split(rasterPath)[1])), 1, 1)
+    
+    yearTS = {} #dict of dicts, date then pointID
     for doy in range (1, bandsCount+1):
-        value = round(raster.GetRasterBand(doy).ReadAsArray()[y][x], precision)
+        rasterArray = raster.GetRasterBand(doy).ReadAsArray()
         date = (yearStart + timedelta(days = (doy - 1))).strftime("%Y-%m-%d")
-        yearTS[date] = value
-
-    #return round(raster.GetRasterBand(1).ReadAsArray()[y][x], precision)
+        yearTS[date] = {}
+        for pointID in pixels.keys():
+            pixel = pixels[pointID]
+            value = round(rasterArray[pixel[0]][pixel[1]], precision)
+            yearTS[date][pointID] = value
+    
     return yearTS
+    
 
 #Create a dictionary of rasters to sample
 rasters = []
 
-for file in glob.glob(rastersPath + searchGlob):
+for file in glob(rastersPath + searchGlob):
     rasters.append(file)
 
 print (f"Found {len(rasters)} rasters")
 
 #Loop over dictionary and sample the time series
-timeSeries = {}
+timeSeries = {} #dict of dicts, date then pointID
 
 for raster in rasters:
-    rasterPath = raster
-    timeSeries = {**timeSeries, **SamplePoint(pointToSample, rasterPath)}
+    print (f"Sampling raster {raster}")
+    timeSeries = {**timeSeries, **SamplePoints(pointsToSample, raster)}
 
+print (f"Sorting time series")
 timeSeries = dict(sorted(timeSeries.items()))
 
 #Write timeseries to disk
+print (f"Writing results to {outputPath}")
 with open(outputPath, "w") as output:
-    output.write("Date,Value\n")
-    for key in timeSeries:
-        output.write(f"{key},{str(timeSeries[key])}\n") #str(timeseries[key]) to force output of rounded precision above, else it would output entire float64(?) decimals.
+    header = "Date"
+    pointIDs = pointsToSample.keys()
+    print (f"point IDs : {pointIDs}")
+    for pointID in  pointsToSample:
+        header += f",{pointID}"
+    header += "\n" #add breakline
+    output.write(header)
+
+    for date in timeSeries.keys():
+        line = date
+        for pointID in pointIDs:
+            line += "," + str(timeSeries[date][pointID]) #str(timeseries[key]) to force output of rounded precision above, else it would output entire float64(?) decimals.
+        line += "\n"
+
+        output.write(line)
