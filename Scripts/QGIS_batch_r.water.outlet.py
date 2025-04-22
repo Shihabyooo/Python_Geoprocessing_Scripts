@@ -10,12 +10,16 @@
 from typing import Any, Optional
 
 from qgis.core import (
+    edit,
+    QgsField,
     QgsProcessing,
     QgsProcessingAlgorithm,
     QgsProcessingContext,
     QgsProcessingException,
     QgsProcessingFeedback,
-    QgsProcessingParameterFeatureSource,
+    QgsVectorLayer,
+    QgsProcessingParameterVectorLayer,
+    QgsProcessingParameterField,
     QgsProcessingParameterRasterLayer,
     QgsProcessingParameterVectorDestination
 )
@@ -25,6 +29,7 @@ from os.path import split
 class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
 
     INPUT_POINTS = "INPUT_POINTS"
+    INPUT_FIELD = "INPUT_FIELD"
     INPUT_FDR = "INPUT_FDR"
     OUTPUT = "OUTPUT"
 
@@ -46,11 +51,22 @@ class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
     def initAlgorithm(self, config: Optional[dict[str, Any]] = None):
 
         self.addParameter(
-            QgsProcessingParameterFeatureSource(
+            QgsProcessingParameterVectorLayer(
                 self.INPUT_POINTS,
                 "Input Outlet Points",
-                [QgsProcessing.SourceType.TypeVectorAnyGeometry], #TODO switch to point
+                [QgsProcessing.SourceType.TypeVectorPoint], #TODO switch to point
                 optional= False
+            )
+        )
+
+        self.addParameter(
+            QgsProcessingParameterField(
+                self.INPUT_FIELD,
+                "Dissolve field",
+                None,
+                self.INPUT_POINTS,
+                QgsProcessingParameterField.DataType.Any,
+                optional = False,
             )
         )
 
@@ -71,14 +87,23 @@ class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
     def processAlgorithm(self, parameters: dict[str, Any], context: QgsProcessingContext, feedback: QgsProcessingFeedback) -> dict[str, Any]:
         
         points = self.parameterAsSource(parameters, self.INPUT_POINTS, context)
+        attribName = self.parameterAsString(parameters, self.INPUT_FIELD, context)
         fdr = self.parameterAsRasterLayer(parameters, self.INPUT_FDR, context)
         outVec = self.parameterAsOutputLayer(parameters, self.OUTPUT, context)
+        
+        feedback.pushInfo(f"Selected field {attribName}") #test
 
         polyList = []
         textSeperator = "".join(["-" for i in range(1, 100)]) #TODO does qgis feedback have a decorator to do this?
 
+        sourceFieldType = QgsField (attribName, points.fields()[1].type())
+
         for feature in points.getFeatures():
             #delineate the watershed using r.water.outlet
+            #feedback.pushInfo(f"attrib = {feature.attribute(attribName)}") #test
+            #continue #test
+
+
             point = feature.geometry().asPoint()
             coords = f"{point.x()} , {point.y()}"
             feedback.pushInfo(textSeperator)
@@ -99,8 +124,22 @@ class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
             
             shedPoly = list(run("gdal:polygonize", polygonizeInputDict, feedback = feedback).values())[0]
             #TODO run the generated polygon through fix geometries.
+            
+            
+            #add the attribute we want to preserve to this polygon
+            shedPolyLayer = QgsVectorLayer(shedPoly)
+            shedPolyLayer.startEditing()
+            attrib = feature.attribute(attribName)
+            feedback.pushInfo(f"Appending attribute ( {attribName} = {attrib} ) to created polyon")
+            shedPolyLayer.addAttribute(sourceFieldType)
+            shedPolyLayer.updateFields()
 
-            #append to the list of vectors
+            for _feature in shedPolyLayer.getFeatures(): #There shouldn't be more than one poly, but I don't really trust r.water.outlet + Polygonize combination...
+                shedPolyLayer.changeAttributeValue(_feature[0], _feature.fieldNameIndex(attribName), attrib)
+
+            shedPolyLayer.commitChanges()
+
+            #append polygon to the list of vectors
             polyList.append(shedPoly)
 
         #merge the individual vectors into one, mult-feature vector layer.
