@@ -5,7 +5,6 @@
 #CRS of the point layer must match that of the raster.
 
 #TODO handle CRS mismatch.
-#TODO allow using attributes from raster to name output files
 #TODO consider switching this script to use the @alg approach. Much less LoC.
 from typing import Any, Optional
 
@@ -46,7 +45,10 @@ class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
         return "CustomScripts"
 
     def shortHelpString(self) -> str:
-        return "Delineating multiple points in one vector file using GRASS r.water.outlet tool"
+        return "Delineating multiple points in one vector file using GRASS r.water.outlet tool.<br>This tool takes a point vector files,\
+            then uses the coordinates of each point as an input to GRASS r.water.outlet, as such, the Flow DIrection Raster must be in GRASS format.\
+                <br>The Field to maintain is an attribute in the input points file that would assigned to the resulting watersheds. Mainly to differentiate\
+                    between output watersheds.<br>Note: Input points and raster must be in the same CRS."
 
     def initAlgorithm(self, config: Optional[dict[str, Any]] = None):
 
@@ -54,7 +56,7 @@ class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
             QgsProcessingParameterVectorLayer(
                 self.INPUT_POINTS,
                 "Input Outlet Points",
-                [QgsProcessing.SourceType.TypeVectorPoint], #TODO switch to point
+                [QgsProcessing.SourceType.TypeVectorPoint],
                 optional= False
             )
         )
@@ -62,7 +64,7 @@ class ExampleProcessingAlgorithm(QgsProcessingAlgorithm):
         self.addParameter(
             QgsProcessingParameterField(
                 self.INPUT_FIELD,
-                "Dissolve field",
+                "Field to maintain in output",
                 None,
                 self.INPUT_POINTS,
                 QgsProcessingParameterField.DataType.Any,
